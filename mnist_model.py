@@ -37,6 +37,22 @@ class ClsNet(nn.Module):
     def forward(self, x):
         return F.log_softmax(self.cnn(x))
 
+
+class AffineGridLocNet(nn.Moudle):
+
+    def __init__(self, grid_height, grid_width, target_control_points):
+        super(AffineGridLocNet, self).__init__()
+        self.cnn = CNN(6)
+
+        # Initialize the weights/bias with identity transformation
+        self.cnn.fc2.weight.data.zero_()
+        self.cnn.fc2.bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def forward(self, x):
+        theta = self.cnn(x)
+        theta = theta.view(-1, 2, 3)
+        return theta
+
 class BoundedGridLocNet(nn.Module):
 
     def __init__(self, grid_height, grid_width, target_control_points):
@@ -73,6 +89,7 @@ class STNClsNet(nn.Module):
     def __init__(self, args):
         super(STNClsNet, self).__init__()
         self.args = args
+        self.model = args.model
 
         r1 = args.span_range_height
         r2 = args.span_range_width
@@ -87,6 +104,7 @@ class STNClsNet(nn.Module):
         GridLocNet = {
             'unbounded_stn': UnBoundedGridLocNet,
             'bounded_stn': BoundedGridLocNet,
+            'affine_stn': AffineGridLocNet,
         }[args.model]
         self.loc_net = GridLocNet(args.grid_height, args.grid_width, target_control_points)
 
@@ -96,10 +114,15 @@ class STNClsNet(nn.Module):
 
     def forward(self, x):
         batch_size = x.size(0)
-        source_control_points = self.loc_net(x)
-        source_coordinate = self.tps(source_control_points)
-        grid = source_coordinate.view(batch_size, self.args.image_height, self.args.image_width, 2)
-        transformed_x = grid_sample(x, grid)
+        if self.model == 'affine_stn':
+            theta = self.loc_net(x)
+            grid = F.affine_grid(theta, x.size())
+            transformed_x = F.grid_sample(x, grid)
+        else:
+            source_control_points = self.loc_net(x)
+            source_coordinate = self.tps(source_control_points)
+            grid = source_coordinate.view(batch_size, self.args.image_height, self.args.image_width, 2)
+            transformed_x = grid_sample(x, grid)
         logit = self.cls_net(transformed_x)
         return logit
 
